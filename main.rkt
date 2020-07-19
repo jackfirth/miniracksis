@@ -1,6 +1,8 @@
 #lang racket/base
 
-(require data/gvector
+(require (for-syntax syntax/parse/lib/function-header)
+         data/gvector
+         math/base
          racket/contract/base
          racket/contract/region
          racket/math
@@ -8,7 +10,26 @@
          rebellion/collection/list
          rebellion/collection/vector
          rebellion/type/enum
-         rebellion/type/object)
+         rebellion/type/object
+         syntax/parse/define)
+
+;@------------------------------------------------------------------------------
+;; Comment this definition out to enable contracts
+
+(define-simple-macro (define/contract header contract body ...)
+  (define header body ...))
+
+;@------------------------------------------------------------------------------
+;; Use this instead of define to search for loops that run forever
+
+(define-simple-macro (define/loop-logging header:function-header body ...)
+  (begin
+    (define call-counter (box 0))
+    (define header
+      (set-box! call-counter (add1 (unbox call-counter)))
+      (when (power-of-two? (unbox call-counter))
+        (printf "~a called ~a times" header.name (unbox call-counter)))
+      body ...)))
 
 ;@------------------------------------------------------------------------------
 ;; Type definitions that need to be at the top so they can be used in contracts.
@@ -172,6 +193,16 @@
 
 (define/contract (cache-test-function test-function)
   (-> (-> test-case? void?) (-> gvector? case-status?))
+  (λ (choices)
+    (define num-choices (gvector-count choices))
+    (define case (test-case-for-choices choices))
+    (test-function case)
+    (unless (case-status? (test-case-status case))
+      (error "Assertion failed."))
+    (test-case-status case)))
+
+(define/contract (proper-cache-test-function test-function)
+  (-> (-> test-case? void?) (-> gvector? case-status?))
   (define tree (make-hash))
   (λ (choices)
     (define num-choices (gvector-count choices))
@@ -289,21 +320,19 @@
         (λ (case) (testing-state-test-function state case))))
      (define/contract (consider choices)
        (-> gvector? boolean?)
-       (define status (cached choices))
-       (printf "status = ~a\n" status)
-       (equal? status interesting))
+       (equal? (cached choices) interesting))
      (unless (consider (testing-state-result state))
        (error "Assertion failed."))
 
-     (define (loop old-prev)
+     (define/loop-logging (shrink-loop old-prev)
        (when (not (equal? old-prev (testing-state-result state)))
          (define prev (testing-state-result state))
 
          ;; First try deleting each choice we made in chunks
          (for ([k (in-list (list 8 4 2 1))])
-           (define (delete-loop i)
+           (define/loop-logging (delete-loop i)
              (when (>= i 0)
-               (define attempt (make-gvector (+ i (- k i))))
+               (define attempt (make-gvector #:capacity (+ i (- k i))))
                (for ([j (in-range i)])
                  (define v (gvector-ref (testing-state-result state) j))
                  (gvector-set! attempt j v))
@@ -320,10 +349,11 @@
 
          ;; Now try replacing blocks of choices with zeroes
          (for ([k (in-list (list 8 4 2 1))])
-           (define (zero-loop i)
+           (define/loop-logging (zero-loop i)
              (when (>= i 0)
                (define attempt
-                 (make-gvector (gvector-count (testing-state-result state))))
+                 (make-gvector
+                  #:capacity (gvector-count (testing-state-result state))))
                (for ([j (in-range
                          (gvector-count (testing-state-result state)))])
                  (define v
@@ -340,24 +370,25 @@
          ;; binary search.
          (define max-i (sub1 (gvector-count (testing-state-result state))))
          (for ([i (in-range max-i -1 -1)])
-           (define (replace-loop lo hi)
+           (define/loop-logging (replace-loop lo hi)
              (when (< (add1 lo) hi)
                (define mid (quotient (+ lo (- hi lo)) 2))
                (define attempt
-                 (make-gvector (gvector-count (testing-state-result state))))
+                 (make-gvector
+                  #:capacity (gvector-count (testing-state-result state))))
                (for ([j (in-range
                          (gvector-count (testing-state-result state)))])
                  (define v
                    (if (equal? j i)
                        mid
-                       (gvector-ref (testing-state-result state))))
+                       (gvector-ref (testing-state-result state) j)))
                  (gvector-set! attempt j v))
                (if (consider attempt)
                    (replace-loop lo mid)
                    (replace-loop mid hi))))
            (replace-loop 0 (gvector-ref (testing-state-result state) i)))))
 
-     (loop #f)]))
+     (shrink-loop #f)]))
 
 (define buffer-size (* 8 1024))
 
@@ -396,13 +427,9 @@
 ;; Tests
 
 (module+ test
-  (require (only-in rackunit
-                    check-equal?
-                    check-exn))
-
   (run-test
    (λ (case)
      (define ints
-       (test-case-any case (possible-lists (possible-integers 0 10000))))
-     (unless (<= (apply + ints) 1000)
+       (test-case-any case (possible-lists (possible-integers 0 100))))
+     (unless (<= (apply + ints) 10)
        (raise "Failure!")))))
