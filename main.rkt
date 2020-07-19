@@ -332,17 +332,18 @@
          (for ([k (in-list (list 8 4 2 1))])
            (define/loop-logging (delete-loop i)
              (when (>= i 0)
-               (define attempt (make-gvector #:capacity (+ i (- k i))))
+               (define size (gvector-count (testing-state-result state)))
+               (define attempt
+                 (make-gvector
+                  #:capacity (max 0 (- size k))))
                (for ([j (in-range i)])
                  (define v (gvector-ref (testing-state-result state) j))
                  (gvector-set! attempt j v))
-               (for ([j (in-range (+ i k)
-                                  (gvector-count (testing-state-result state)))]
+               (for ([j (in-range (+ i k) size)]
                      [j* (in-naturals i)])
                  (define v (gvector-ref (testing-state-result state) j))
                  (gvector-set! attempt j* v))
-               (unless (< (gvector-count attempt)
-                          (gvector-count (testing-state-result state)))
+               (unless (< (gvector-count attempt) size)
                  (error "Assertion failed."))
                (if (consider attempt) (delete-loop i) (delete-loop (sub1 i)))))
            (delete-loop (- (gvector-count (testing-state-result state)) k 1)))
@@ -386,7 +387,9 @@
                (if (consider attempt)
                    (replace-loop lo mid)
                    (replace-loop mid hi))))
-           (replace-loop 0 (gvector-ref (testing-state-result state) i)))))
+           (replace-loop 0 (gvector-ref (testing-state-result state) i)))
+
+         (shrink-loop prev)))
 
      (shrink-loop #f)]))
 
