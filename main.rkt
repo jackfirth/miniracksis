@@ -1,6 +1,9 @@
 #lang racket/base
 
 (require data/gvector
+         racket/contract/base
+         racket/contract/region
+         racket/math
          rebellion/binary/bit
          rebellion/collection/list
          rebellion/collection/vector
@@ -8,12 +11,29 @@
          rebellion/type/object)
 
 ;@------------------------------------------------------------------------------
+;; Type definitions that need to be at the top so they can be used in contracts.
 
-(define (run-test test
-                  #:max-examples [max-examples 100]
-                  #:quiet? [quiet? #f])
+(struct test-case
+  (prefix
+   max-size
+   print-results?
+   [status #:mutable]
+   choices
+   depth-parameter)
+  #:constructor-name constructor:test-case)
 
-  (define (mark-failures-interesting case)
+(define-enum-type case-status (overrun invalid valid interesting))
+
+;@------------------------------------------------------------------------------
+
+(define/contract (run-test test
+                           #:max-examples [max-examples 100]
+                           #:quiet? [quiet? #f])
+  (->* ((-> test-case? void?)) (#:max-examples natural? #:quiet? boolean?)
+       void?)
+
+  (define/contract (mark-failures-interesting case)
+    (-> test-case? void?)
     (with-handlers
         ([(λ (_) #t)
           (λ (raised-value)
@@ -69,15 +89,6 @@
 
 ;@------------------------------------------------------------------------------
 ;; Test cases
-
-(struct test-case
-  (prefix
-   max-size
-   print-results?
-   [status #:mutable]
-   choices
-   depth-parameter)
-  #:constructor-name constructor:test-case)
 
 (define (test-case-for-choices choices #:print-results? [print-results? #f])
   (define choice-vector (sequence->vector choices))
@@ -159,11 +170,13 @@
 ;@------------------------------------------------------------------------------
 ;; Test function caching
 
-(define (cache-test-function test-function)
+(define/contract (cache-test-function test-function)
+  (-> (-> test-case? void?) (-> gvector? case-status?))
   (define tree (make-hash))
   (λ (choices)
     (define num-choices (gvector-count choices))
-    (define (loop node previous-cached? previous-known? i)
+    (define/contract (loop node previous-cached? previous-known? i)
+      (-> hash? boolean? boolean? natural? (values any/c boolean? boolean?))
       (cond
         [(equal? i num-choices)
          (values node previous-cached? previous-known?)]
@@ -186,7 +199,8 @@
       [else
        (define case (test-case-for-choices choices))
        (test-function case)
-       (invariant-assertion case-status? (test-case-status case))
+       (unless (case-status? (test-case-status case))
+         (error "Assertion failed."))
        (define case-choices (test-case-choices case))
        (define num-case-choices (gvector-count case-choices))
        (for/fold ([node tree] #:result (void))
@@ -213,12 +227,15 @@
    [test-is-trivial? #:mutable])
   #:constructor-name constructor:testing-state)
 
-(define (make-testing-state
-         #:test-function test-function
-         #:max-examples max-examples)
+(define/contract (make-testing-state
+                  #:test-function test-function
+                  #:max-examples max-examples)
+  (-> #:test-function (-> test-case? void?) #:max-examples natural?
+      testing-state?)
   (constructor:testing-state test-function max-examples 0 0 #f #f #f))
 
-(define (testing-state-test-function state case)
+(define/contract (testing-state-test-function state case)
+  (-> testing-state? test-case? void?)
   (with-handlers ([exn:stop-test? void])
     ((testing-state-internal-test-function state) case))
   (unless (test-case-status case)
@@ -238,11 +255,13 @@
                  (choices< choices (testing-state-result state))))
     (set-testing-state-result! state choices)))
 
-(define (testing-state-run! state)
+(define/contract (testing-state-run! state)
+  (-> testing-state? void?)
   (testing-state-generate! state)
   (testing-state-shrink! state))
 
-(define (testing-state-should-keep-generating? state)
+(define/contract (testing-state-should-keep-generating? state)
+  (-> testing-state? boolean?)
   (and (not (testing-state-test-is-trivial? state))
        (not (testing-state-result state))
        (< (testing-state-valid-test-cases state)
@@ -250,7 +269,8 @@
        (< (testing-state-calls state)
           (* (testing-state-max-examples state) 10))))
 
-(define (testing-state-generate! state)
+(define/contract (testing-state-generate! state)
+  (-> testing-state? void?)
   (when (and (testing-state-should-keep-generating? state)
              (or (not (testing-state-best-scoring state))
                  (<= (testing-state-valid-test-cases state)
@@ -258,15 +278,20 @@
     (define case (make-test-case #:prefix (list) #:max-size buffer-size))
     (testing-state-test-function state case)))
 
-(define (testing-state-shrink! state)
+(define/contract (testing-state-shrink! state)
+  (-> testing-state? void?)
   (cond
-    [(testing-state-result state) (testing-state-result state)]
     [(not (testing-state-result state)) (void)]
     [else
-     (define cached
+     (define/contract cached
+       (-> gvector? case-status?)
        (cache-test-function
         (λ (case) (testing-state-test-function state case))))
-     (define (consider choices) (equal? (cached choices) interesting))
+     (define/contract (consider choices)
+       (-> gvector? boolean?)
+       (define status (cached choices))
+       (printf "status = ~a\n" status)
+       (equal? status interesting))
      (unless (consider (testing-state-result state))
        (error "Assertion failed."))
 
@@ -336,7 +361,8 @@
 
 (define buffer-size (* 8 1024))
 
-(define (choices< choices1 choices2)
+(define/contract (choices< choices1 choices2)
+  (-> gvector? gvector? boolean?)
   (define count1 (gvector-count choices1))
   (define count2 (gvector-count choices2))
   (define (elements< i)
@@ -366,10 +392,6 @@
 (define (stop-test)
   (exn:stop-test "This test case is stopped." (current-continuation-marks)))
 
-(define-enum-type case-status (overrun invalid valid interesting))
-
-(define (overrun? v) (equal? v overrun))
-
 ;@------------------------------------------------------------------------------
 ;; Tests
 
@@ -378,17 +400,9 @@
                     check-equal?
                     check-exn))
 
-  (define stdout (open-output-string 'stdout))
-  (check-exn
-   (λ (e) (equal? e "Failure!"))
-   (λ ()
-     (parameterize ([current-output-port stdout])
-       (run-test
-        (λ (case)
-          (define ints
-            (test-case-any case (possible-lists (possible-integers 0 10000))))
-          (unless (<= (apply + ints) 1000)
-            (raise "Failure!")))))))
-  (check-equal? (get-output-string stdout)
-                "any(#<possibility:possible-lists>) = (1001)"))
-  
+  (run-test
+   (λ (case)
+     (define ints
+       (test-case-any case (possible-lists (possible-integers 0 10000))))
+     (unless (<= (apply + ints) 1000)
+       (raise "Failure!")))))
