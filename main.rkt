@@ -1,14 +1,11 @@
 #lang racket/base
 
 (require data/gvector
-         racket/contract/base
-         racket/contract/region
          rebellion/binary/bit
          rebellion/collection/list
          rebellion/collection/vector
          rebellion/type/enum
-         rebellion/type/object
-         rebellion/type/singleton)
+         rebellion/type/object)
 
 ;@------------------------------------------------------------------------------
 
@@ -178,7 +175,8 @@
             (define next-node (hash-ref node c))
             (cond
               [(case-status? next-node)
-               (invariant-assertion (not/c overrun?) next-node)
+               (when (equal? next-node overrun)
+                 (error "Assertion failed."))
                (values next-node #t #t)]
               [else (loop next-node #f #t (add1 i))])])]))
     (define-values (node cached? known?) (loop tree #f #t 0))
@@ -263,12 +261,14 @@
 (define (testing-state-shrink! state)
   (cond
     [(testing-state-result state) (testing-state-result state)]
+    [(not (testing-state-result state)) (void)]
     [else
      (define cached
        (cache-test-function
         (λ (case) (testing-state-test-function state case))))
      (define (consider choices) (equal? (cached choices) interesting))
-     (invariant-assertion #t (consider (testing-state-result state)))
+     (unless (consider (testing-state-result state))
+       (error "Assertion failed."))
 
      (define (loop old-prev)
        (when (not (equal? old-prev (testing-state-result state)))
@@ -287,10 +287,9 @@
                      [j* (in-naturals i)])
                  (define v (gvector-ref (testing-state-result state) j))
                  (gvector-set! attempt j* v))
-               (invariant-assertion
-                #t
-                (< (gvector-count attempt)
-                   (gvector-count (testing-state-result state))))
+               (unless (< (gvector-count attempt)
+                          (gvector-count (testing-state-result state)))
+                 (error "Assertion failed."))
                (if (consider attempt) (delete-loop i) (delete-loop (sub1 i)))))
            (delete-loop (- (gvector-count (testing-state-result state)) k 1)))
 
