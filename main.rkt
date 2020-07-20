@@ -28,7 +28,7 @@
     (define header
       (set-box! call-counter (add1 (unbox call-counter)))
       (when (power-of-two? (unbox call-counter))
-        (printf "~a called ~a times" header.name (unbox call-counter)))
+        (printf "~a called ~a times\n" header.name (unbox call-counter)))
       body ...)))
 
 ;@------------------------------------------------------------------------------
@@ -334,15 +334,7 @@
              (when (>= i 0)
                (define size (gvector-count (testing-state-result state)))
                (define attempt
-                 (make-gvector
-                  #:capacity (max 0 (- size k))))
-               (for ([j (in-range i)])
-                 (define v (gvector-ref (testing-state-result state) j))
-                 (gvector-set! attempt j v))
-               (for ([j (in-range (+ i k) size)]
-                     [j* (in-naturals i)])
-                 (define v (gvector-ref (testing-state-result state) j))
-                 (gvector-set! attempt j* v))
+                 (gvector-delete-range (testing-state-result state) i (+ i k)))
                (unless (< (gvector-count attempt) size)
                  (error "Assertion failed."))
                (if (consider attempt) (delete-loop i) (delete-loop (sub1 i)))))
@@ -353,15 +345,8 @@
            (define/loop-logging (zero-loop i)
              (when (>= i 0)
                (define attempt
-                 (make-gvector
-                  #:capacity (gvector-count (testing-state-result state))))
-               (for ([j (in-range
-                         (gvector-count (testing-state-result state)))])
-                 (define v
-                   (if (or (< j i) (>= j (+ i k)))
-                       (gvector-ref (testing-state-result state) j)
-                       0))
-                 (gvector-set! attempt j v))
+                 (gvector-set-range-to-zero
+                  (testing-state-result state) i (+ i k)))
                (if (consider attempt)
                    (zero-loop (- i k))
                    (zero-loop (sub1 i)))))
@@ -373,17 +358,8 @@
          (for ([i (in-range max-i -1 -1)])
            (define/loop-logging (replace-loop lo hi)
              (when (< (add1 lo) hi)
-               (define mid (quotient (+ lo (- hi lo)) 2))
-               (define attempt
-                 (make-gvector
-                  #:capacity (gvector-count (testing-state-result state))))
-               (for ([j (in-range
-                         (gvector-count (testing-state-result state)))])
-                 (define v
-                   (if (equal? j i)
-                       mid
-                       (gvector-ref (testing-state-result state) j)))
-                 (gvector-set! attempt j v))
+               (define mid (+ lo (quotient (- hi lo) 2)))
+               (define attempt (gvector-set (testing-state-result state) i mid))
                (if (consider attempt)
                    (replace-loop lo mid)
                    (replace-loop mid hi))))
@@ -426,6 +402,41 @@
 (define (stop-test)
   (exn:stop-test "This test case is stopped." (current-continuation-marks)))
 
+(define (gvector-delete-range gvector start [stop* +inf.0])
+  (define stop (min stop* (gvector-count gvector)))
+  (define size (- stop start))
+  (define modified (make-gvector-with-bugfix #:capacity size))
+  (for ([i (in-range start stop)]
+        [j (in-naturals)])
+    (gvector-set! modified j (gvector-ref gvector i)))
+  modified)
+
+(define (gvector-set-range-to-zero gvector start [stop* +inf.0])
+  (define stop (min stop* (gvector-count gvector)))
+  (define size (gvector-count gvector))
+  (define modified (make-gvector-with-bugfix #:capacity size))
+  (for ([i (in-range 0 start)])
+    (gvector-set! modified i (gvector-ref gvector i)))
+  (for ([i (in-range start stop)])
+    (gvector-set! modified i 0))
+  (for ([i (in-range stop size)])
+    (gvector-set! modified i (gvector-ref gvector i)))
+  modified)
+
+(define (gvector-set gvector position replacement)
+  (define size (gvector-count gvector))
+  (define modified (make-gvector-with-bugfix #:capacity size))
+  (for ([i (in-range 0 position)])
+    (gvector-set! modified i (gvector-ref gvector i)))
+  (gvector-set! modified position replacement)
+  (for ([i (in-range (add1 position) size)])
+    (gvector-set! modified i (gvector-ref gvector i)))
+  modified)
+
+;; TODO(https://github.com/racket/data/issues/18): fix make-gvector
+(define (make-gvector-with-bugfix #:capacity [capacity 10])
+  (if (zero? capacity) (gvector) (make-gvector #:capacity capacity)))
+
 ;@------------------------------------------------------------------------------
 ;; Tests
 
@@ -433,6 +444,6 @@
   (run-test
    (λ (case)
      (define ints
-       (test-case-any case (possible-lists (possible-integers 0 100))))
-     (unless (<= (apply + ints) 10)
+       (test-case-any case (possible-lists (possible-integers 0 10000))))
+     (unless (<= (apply + ints) 1000)
        (raise "Failure!")))))
