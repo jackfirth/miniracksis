@@ -28,7 +28,7 @@
     (define header
       (set-box! call-counter (add1 (unbox call-counter)))
       (when (power-of-two? (unbox call-counter))
-        (printf "~a called ~a times\n" header.name (unbox call-counter)))
+        (printf "~a called ~a times\n" 'header.name (unbox call-counter)))
       body ...)))
 
 ;@------------------------------------------------------------------------------
@@ -324,13 +324,13 @@
      (unless (consider (testing-state-result state))
        (error "Assertion failed."))
 
-     (define/loop-logging (shrink-loop old-prev)
+     (define (shrink-loop old-prev)
        (when (not (equal? old-prev (testing-state-result state)))
          (define prev (testing-state-result state))
 
          ;; First try deleting each choice we made in chunks
          (for ([k (in-list (list 8 4 2 1))])
-           (define/loop-logging (delete-loop i)
+           (define (delete-loop i)
              (when (>= i 0)
                (define size (gvector-count (testing-state-result state)))
                (define attempt
@@ -342,7 +342,7 @@
 
          ;; Now try replacing blocks of choices with zeroes
          (for ([k (in-list (list 8 4 2 1))])
-           (define/loop-logging (zero-loop i)
+           (define (zero-loop i)
              (when (>= i 0)
                (define attempt
                  (gvector-set-range-to-zero
@@ -356,7 +356,7 @@
          ;; binary search.
          (define max-i (sub1 (gvector-count (testing-state-result state))))
          (for ([i (in-range max-i -1 -1)])
-           (define/loop-logging (replace-loop lo hi)
+           (define (replace-loop lo hi)
              (when (< (add1 lo) hi)
                (define mid (+ lo (quotient (- hi lo) 2)))
                (define attempt (gvector-set (testing-state-result state) i mid))
